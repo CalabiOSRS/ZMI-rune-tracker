@@ -8,7 +8,6 @@ import net.runelite.client.util.QuantityFormatter;
 
 import javax.inject.Inject;
 import java.awt.*;
-import java.awt.image.BufferedImage;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
@@ -41,14 +40,8 @@ public class ZmiTrackerOverlay extends OverlayPanel
     @Override
     public Dimension render(Graphics2D graphics)
     {
-        // Hide when outside ZMI unless configured to always show
-        if (!plugin.isInOuraniaRegion() && !config.showOutsideZmi())
-        {
-            return null;
-        }
-
-        // Hide if no data yet and not in region
-        if (plugin.getLapCount() == 0 && !plugin.isInOuraniaRegion())
+        // Show once at least one lap has been recorded, or if "always show" is on
+        if (plugin.getLapCount() == 0 && !config.showOutsideZmi())
         {
             return null;
         }

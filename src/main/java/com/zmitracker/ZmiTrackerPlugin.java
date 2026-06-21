@@ -3,7 +3,6 @@ package com.zmitracker;
 import com.google.inject.Provides;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
-import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.*;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -23,9 +22,7 @@ import java.util.*;
 )
 public class ZmiTrackerPlugin extends Plugin
 {
-    // Ourania Altar region ID
-    private static final int OURANIA_ALTAR_REGION = 11855;
-    // Animation ID for crafting runes at the altar
+    // Animation ID for crafting runes at a runic altar
     private static final int RUNECRAFT_ANIMATION = 791;
 
     // All rune item IDs that can be received from ZMI
@@ -75,7 +72,6 @@ public class ZmiTrackerPlugin extends Plugin
     private long sessionValue = 0;
     private int lapCount = 0;
 
-    private boolean inOuraniaRegion = false;
     private boolean pendingCraftSnapshot = false;
 
     @Override
@@ -105,19 +101,8 @@ public class ZmiTrackerPlugin extends Plugin
     }
 
     @Subscribe
-    public void onGameStateChanged(GameStateChanged event)
-    {
-        if (event.getGameState() == GameState.LOGGED_IN)
-        {
-            checkRegion();
-        }
-    }
-
-    @Subscribe
     public void onGameTick(GameTick tick)
     {
-        checkRegion();
-
         // After animation triggers a snapshot, wait one tick for inventory to update
         if (pendingCraftSnapshot)
         {
@@ -129,11 +114,6 @@ public class ZmiTrackerPlugin extends Plugin
     @Subscribe
     public void onAnimationChanged(AnimationChanged event)
     {
-        if (!inOuraniaRegion)
-        {
-            return;
-        }
-
         Actor actor = event.getActor();
         if (!(actor instanceof Player))
         {
@@ -153,19 +133,6 @@ public class ZmiTrackerPlugin extends Plugin
             // We'll read gains on the next tick once inventory has updated
             pendingCraftSnapshot = true;
         }
-    }
-
-    private void checkRegion()
-    {
-        if (client.getGameState() != GameState.LOGGED_IN)
-        {
-            inOuraniaRegion = false;
-            return;
-        }
-
-        WorldPoint location = client.getLocalPlayer().getWorldLocation();
-        int region = location.getRegionID();
-        inOuraniaRegion = (region == OURANIA_ALTAR_REGION);
     }
 
     /**
@@ -233,7 +200,7 @@ public class ZmiTrackerPlugin extends Plugin
 
         if (lapGains.isEmpty())
         {
-            // No runes detected — likely not a ZMI craft (e.g. clicked wrong altar)
+            // No runes detected this craft
             return;
         }
 
@@ -289,11 +256,6 @@ public class ZmiTrackerPlugin extends Plugin
     public int getLapCount()
     {
         return lapCount;
-    }
-
-    public boolean isInOuraniaRegion()
-    {
-        return inOuraniaRegion;
     }
 
     public void resetSession()

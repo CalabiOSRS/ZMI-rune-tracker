@@ -31,8 +31,8 @@ public interface ZmiTrackerConfig extends Config
 
     @ConfigItem(
         keyName = "showOutsideZmi",
-        name = "Show overlay outside ZMI",
-        description = "Keep the overlay visible when you leave the Ourania Altar area",
+        name = "Always show overlay",
+        description = "Keep the overlay visible even before your first crafting lap",
         position = 2
     )
     default boolean showOutsideZmi()
