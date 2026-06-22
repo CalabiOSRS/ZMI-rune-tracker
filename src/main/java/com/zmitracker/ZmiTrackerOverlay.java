@@ -151,16 +151,21 @@ public class ZmiTrackerOverlay extends OverlayPanel
             panelComponent.getChildren().add(LineComponent.builder().left("  —").leftColor(DIM_COLOR).build());
             return;
         }
-        for (Map.Entry<Integer, Integer> e : runes.entrySet())
-        {
-            int price = itemManager.getItemPrice(e.getKey());
-            long value = (long) price * e.getValue();
-            panelComponent.getChildren().add(LineComponent.builder()
-                .left("  " + QuantityFormatter.quantityToStackSize(e.getValue()) + "× " + runeName(e.getKey()))
-                .leftColor(RUNE_COLOR)
-                .right(formatGp(value)).rightColor(LABEL_COLOR)
-                .build());
-        }
+        runes.entrySet().stream()
+            .sorted((a, b) -> {
+                long valA = (long) itemManager.getItemPrice(a.getKey()) * a.getValue();
+                long valB = (long) itemManager.getItemPrice(b.getKey()) * b.getValue();
+                return Long.compare(valB, valA);
+            })
+            .forEach(e -> {
+                int price = itemManager.getItemPrice(e.getKey());
+                long value = (long) price * e.getValue();
+                panelComponent.getChildren().add(LineComponent.builder()
+                    .left("  " + QuantityFormatter.quantityToStackSize(e.getValue()) + "× " + runeName(e.getKey()))
+                    .leftColor(RUNE_COLOR)
+                    .right(formatGp(value)).rightColor(LABEL_COLOR)
+                    .build());
+            });
     }
 
     private static String formatGp(long gp)
