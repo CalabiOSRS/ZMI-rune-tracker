@@ -1,6 +1,7 @@
 package com.zmitracker;
 
 import net.runelite.api.ItemID;
+import net.runelite.api.MenuAction;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.ui.overlay.*;
 import net.runelite.client.ui.overlay.components.*;
@@ -11,6 +12,8 @@ import java.awt.*;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
 
 public class ZmiTrackerOverlay extends OverlayPanel
 {
@@ -18,8 +21,12 @@ public class ZmiTrackerOverlay extends OverlayPanel
     private static final Color VALUE_COLOR   = new Color(  0, 220, 100);
     private static final Color LABEL_COLOR   = new Color(200, 200, 200);
     private static final Color RUNE_COLOR    = new Color(180, 220, 255);
-    private static final Color CURRENT_COLOR = new Color(255, 165,   0); // orange = in progress
+    private static final Color CURRENT_COLOR = new Color(255, 165,   0);
     private static final Color DIM_COLOR     = new Color(120, 120, 120);
+
+    private static final Set<Integer> ELEMENTAL_RUNE_IDS = new HashSet<>(java.util.Arrays.asList(
+        ItemID.AIR_RUNE, ItemID.WATER_RUNE, ItemID.EARTH_RUNE, ItemID.FIRE_RUNE
+    ));
 
     private final ZmiTrackerPlugin plugin;
     private final ZmiTrackerConfig config;
@@ -32,67 +39,60 @@ public class ZmiTrackerOverlay extends OverlayPanel
         this.plugin = plugin;
         this.config = config;
         this.itemManager = itemManager;
+
         setPosition(OverlayPosition.TOP_LEFT);
         setPriority(OverlayPriority.LOW);
         panelComponent.setPreferredSize(new Dimension(230, 0));
+
+        getMenuEntries().add(new OverlayMenuEntry(MenuAction.RUNELITE_OVERLAY, "Reset", "ZMI Rune Tracker"));
     }
 
     @Override
     public Dimension render(Graphics2D graphics)
     {
-        if (!plugin.isLapInProgress() && plugin.getLapCount() == 0 && !config.showOutsideZmi())
-            return null;
+        boolean hasData = plugin.getLapStart() != null || plugin.getLapCount() > 0 || plugin.getCurrentLapValue() > 0;
+        if (!hasData && !config.showOutsideZmi()) return null;
 
+        // Set background opacity
+        panelComponent.setBackgroundColor(new Color(23, 23, 23, config.backgroundOpacity()));
         panelComponent.getChildren().clear();
 
+        // ── Title ──────────────────────────────────────────────────────────────
         panelComponent.getChildren().add(TitleComponent.builder()
-            .text("⚗ ZMI Rune Tracker").color(HEADER_COLOR).build());
-        panelComponent.getChildren().add(LineComponent.builder().left("").build());
+            .text("ZMI Rune Tracker").color(HEADER_COLOR).build());
 
-        // ── Current lap (in progress) ──────────────────────────────────────
-        if (plugin.isLapInProgress())
+        // ── Current lap ────────────────────────────────────────────────────────
+        Instant lapStart = plugin.getLapStart();
+        if (lapStart != null)
         {
-            String elapsed = formatDuration(Duration.between(plugin.getCurrentLapStart(), Instant.now()).getSeconds());
+            long elapsed = Duration.between(lapStart, Instant.now()).getSeconds();
+            panelComponent.getChildren().add(LineComponent.builder().left("").build());
             panelComponent.getChildren().add(LineComponent.builder()
-                .left("Current lap (" + elapsed + ")")
+                .left("Current lap (" + formatTime(elapsed) + ")")
                 .leftColor(CURRENT_COLOR)
                 .right(formatGp(plugin.getCurrentLapValue()))
                 .rightColor(CURRENT_COLOR)
                 .build());
 
             if (config.showCurrentLapBreakdown())
-                renderRuneBreakdown(plugin.getCurrentLapRunes());
-
-            panelComponent.getChildren().add(LineComponent.builder().left("").build());
+                renderBreakdown(plugin.getCurrentLapRunes());
         }
 
-        // ── Last completed lap ─────────────────────────────────────────────
+        // ── Last lap ───────────────────────────────────────────────────────────
         if (plugin.getLapCount() > 0)
         {
+            panelComponent.getChildren().add(LineComponent.builder().left("").build());
             panelComponent.getChildren().add(LineComponent.builder()
-                .left("Last lap")
+                .left("Last lap (" + formatTime(plugin.getLastLapSeconds()) + ")")
                 .leftColor(LABEL_COLOR)
                 .right(formatGp(plugin.getLastLapValue()))
                 .rightColor(VALUE_COLOR)
                 .build());
-
-            if (config.showLapTime() && plugin.getLastLapCraftSeconds() > 0)
-            {
-                panelComponent.getChildren().add(LineComponent.builder()
-                    .left("  craft time")
-                    .leftColor(DIM_COLOR)
-                    .right(formatDuration(plugin.getLastLapCraftSeconds()))
-                    .rightColor(DIM_COLOR)
-                    .build());
-            }
-
-            if (config.showLastLapBreakdown())
-                renderRuneBreakdown(plugin.getLastLapRunes());
-
-            panelComponent.getChildren().add(LineComponent.builder().left("").build());
         }
 
-        // ── Session ───────────────────────────────────────────────────────
+        // ── Session ────────────────────────────────────────────────────────────
+        panelComponent.getChildren().add(LineComponent.builder().left("").build());
+
         if (config.showLapCount())
         {
             panelComponent.getChildren().add(LineComponent.builder()
@@ -112,23 +112,23 @@ public class ZmiTrackerOverlay extends OverlayPanel
                 .left("  avg/lap").leftColor(DIM_COLOR)
                 .right(formatGp(plugin.getSessionValue() / plugin.getLapCount())).rightColor(DIM_COLOR)
                 .build());
-        }
 
-        if (config.showLapTime() && plugin.getAverageTripSeconds() > 0)
-        {
-            panelComponent.getChildren().add(LineComponent.builder()
-                .left("  avg trip").leftColor(DIM_COLOR)
-                .right(formatDuration(plugin.getAverageTripSeconds())).rightColor(DIM_COLOR)
-                .build());
+            if (plugin.getAverageLapSeconds() > 0)
+            {
+                panelComponent.getChildren().add(LineComponent.builder()
+                    .left("  avg trip").leftColor(DIM_COLOR)
+                    .right(formatTime(plugin.getAverageLapSeconds())).rightColor(DIM_COLOR)
+                    .build());
+            }
         }
 
         if (config.showSessionBreakdown())
-            renderRuneBreakdown(plugin.getSessionRunes());
+            renderBreakdown(plugin.getSessionRunes());
 
-        if (config.showGpPerHour() && plugin.getLapCount() > 0)
+        if (config.showGpPerHour())
         {
             long elapsed = Duration.between(sessionStart, Instant.now()).getSeconds();
-            if (elapsed > 0)
+            if (elapsed > 0 && plugin.getSessionValue() > 0)
             {
                 panelComponent.getChildren().add(LineComponent.builder()
                     .left("GP / hour").leftColor(LABEL_COLOR)
@@ -137,31 +137,23 @@ public class ZmiTrackerOverlay extends OverlayPanel
             }
         }
 
-        panelComponent.getChildren().add(LineComponent.builder().left("").build());
-        panelComponent.getChildren().add(LineComponent.builder()
-            .left("Right-click to reset").leftColor(DIM_COLOR).build());
-
         return super.render(graphics);
     }
 
-    private void renderRuneBreakdown(Map<Integer, Integer> runes)
+    private void renderBreakdown(Map<Integer, Integer> runes)
     {
-        if (runes.isEmpty())
-        {
-            panelComponent.getChildren().add(LineComponent.builder().left("  —").leftColor(DIM_COLOR).build());
-            return;
-        }
+        if (runes.isEmpty()) return;
+
         runes.entrySet().stream()
-            .sorted((a, b) -> {
-                long valA = (long) itemManager.getItemPrice(a.getKey()) * a.getValue();
-                long valB = (long) itemManager.getItemPrice(b.getKey()) * b.getValue();
-                return Long.compare(valB, valA);
-            })
-            .forEach(e -> {
-                int price = itemManager.getItemPrice(e.getKey());
-                long value = (long) price * e.getValue();
+            .filter(e -> !config.hideElementalRunes() || !ELEMENTAL_RUNE_IDS.contains(e.getKey()))
+            .sorted((a, b) -> Long.compare(
+                (long) itemManager.getItemPrice(b.getKey()) * b.getValue(),
+                (long) itemManager.getItemPrice(a.getKey()) * a.getValue()))
+            .forEach(e ->
+            {
+                long value = (long) itemManager.getItemPrice(e.getKey()) * e.getValue();
                 panelComponent.getChildren().add(LineComponent.builder()
-                    .left("  " + QuantityFormatter.quantityToStackSize(e.getValue()) + "× " + runeName(e.getKey()))
+                    .left("  " + QuantityFormatter.quantityToStackSize(e.getValue()) + "x " + runeName(e.getKey()))
                     .leftColor(RUNE_COLOR)
                     .right(formatGp(value)).rightColor(LABEL_COLOR)
                     .build());
@@ -170,11 +162,12 @@ public class ZmiTrackerOverlay extends OverlayPanel
 
     private static String formatGp(long gp)
     {
-        return gp == 0 ? "—" : QuantityFormatter.quantityToStackSize(gp) + " gp";
+        return gp <= 0 ? "-" : QuantityFormatter.quantityToStackSize(gp) + " gp";
     }
 
-    private static String formatDuration(long seconds)
+    private static String formatTime(long seconds)
     {
+        if (seconds <= 0) return "0s";
         if (seconds < 60) return seconds + "s";
         return (seconds / 60) + "m " + (seconds % 60) + "s";
     }
