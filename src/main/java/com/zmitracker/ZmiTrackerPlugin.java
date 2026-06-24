@@ -42,6 +42,7 @@ public class ZmiTrackerPlugin extends Plugin
     ));
 
     @Inject private Client client;
+    @Inject private net.runelite.client.callback.ClientThread clientThread;
     @Inject private ZmiTrackerConfig config;
     @Inject private ItemManager itemManager;
     @Inject private OverlayManager overlayManager;
@@ -81,7 +82,7 @@ public class ZmiTrackerPlugin extends Plugin
     {
         overlayManager.add(overlay);
         reset();
-        snapshotPouch();
+        clientThread.invokeLater(this::snapshotPouch);
     }
 
     @Override
