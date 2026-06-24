@@ -26,9 +26,13 @@ import java.util.*;
 )
 public class ZmiTrackerPlugin extends Plugin
 {
-    private static final int RUNECRAFT_ANIMATION   = 791;
+    private static final int RUNECRAFT_ANIMATION     = 791;
     private static final int CRAFT_ANIM_WINDOW_TICKS = 20;
-    private static final int BANK_GROUP_ID         = 12;
+    private static final int BANK_GROUP_ID           = 12;
+
+    // Rune pouch varbits: type slots and amount slots (3-slot + 4th slot for divine pouch)
+    private static final int[] POUCH_TYPE_VARBITS   = {29, 30, 31, 1911};
+    private static final int[] POUCH_AMOUNT_VARBITS = {1019, 1020, 1021, 1912};
 
     static final Set<Integer> RUNE_IDS = new HashSet<>(Arrays.asList(
         ItemID.AIR_RUNE, ItemID.MIND_RUNE, ItemID.WATER_RUNE, ItemID.EARTH_RUNE,
@@ -43,22 +47,24 @@ public class ZmiTrackerPlugin extends Plugin
     @Inject private OverlayManager overlayManager;
     @Inject private ZmiTrackerOverlay overlay;
 
-    private final Map<Integer, Integer> prevInventory   = new HashMap<>();
-    private final Map<Integer, Integer> currentLapRunes = new HashMap<>();
-    private final Map<Integer, Integer> lastLapRunes    = new HashMap<>();
-    private final Map<Integer, Integer> sessionRunes    = new HashMap<>();
+    private final Map<Integer, Integer> prevInventory    = new HashMap<>();
+    private final Map<Integer, Integer> currentLapRunes  = new HashMap<>();
+    private final Map<Integer, Integer> lastLapRunes     = new HashMap<>();
+    private final Map<Integer, Integer> pendingLapRunes  = new HashMap<>();
+    private final Map<Integer, Integer> sessionRunes     = new HashMap<>();
+
+    // Rune pouch snapshot [slot index] -> current amount
+    private final int[] pouchAmounts = new int[4];
 
     private long lastLapValue    = 0;
     private long currentLapValue = 0;
     private long sessionValue    = 0;
     private int  lapCount        = 0;
 
-    // Timing
-    private Instant lapStart           = null; // when bank was last closed
-    private long    lastLapSeconds     = 0;
-    private long    totalLapSeconds    = 0;
+    private Instant lapStart        = null;
+    private long    lastLapSeconds  = 0;
+    private long    totalLapSeconds = 0;
 
-    // State
     private boolean wasBankOpen      = false;
     private int     lastCraftAnimTick = -100;
 
@@ -67,6 +73,7 @@ public class ZmiTrackerPlugin extends Plugin
     {
         overlayManager.add(overlay);
         reset();
+        snapshotPouch();
     }
 
     @Override
@@ -90,35 +97,41 @@ public class ZmiTrackerPlugin extends Plugin
         boolean isBankOpen = bankWidget != null && !bankWidget.isHidden();
 
         if (isBankOpen && !wasBankOpen)
-        {
             onBankOpened();
-        }
         else if (!isBankOpen && wasBankOpen)
-        {
             onBankClosed();
-        }
 
         wasBankOpen = isBankOpen;
     }
 
     private void onBankOpened()
     {
-        // End of lap: bank reached
-        if (lapStart != null && !currentLapRunes.isEmpty())
+        // Arrived at bank after crafting — snapshot runes but wait until bank closes to record time
+        if (!currentLapRunes.isEmpty())
         {
-            lastLapSeconds = Duration.between(lapStart, Instant.now()).getSeconds();
-            totalLapSeconds += lastLapSeconds;
-            finalizeLap();
+            pendingLapRunes.clear();
+            pendingLapRunes.putAll(currentLapRunes);
+            lastLapRunes.clear();
+            lastLapRunes.putAll(currentLapRunes);
+            lastLapValue = currentLapValue;
+            currentLapRunes.clear();
+            currentLapValue = 0;
         }
-        lapStart = null;
     }
 
     private void onBankClosed()
     {
-        // Start of new lap: leaving bank
+        // Full lap complete: bank-close to bank-close (includes banking + running + crafting)
+        if (lapStart != null && !pendingLapRunes.isEmpty())
+        {
+            lastLapSeconds = Duration.between(lapStart, Instant.now()).getSeconds();
+            totalLapSeconds += lastLapSeconds;
+            lapCount++;
+            pendingLapRunes.clear();
+        }
+        // Start timer for next lap
         lapStart = Instant.now();
-        currentLapRunes.clear();
-        currentLapValue = 0;
+        snapshotPouch();
     }
 
     // ── Craft animation gate ───────────────────────────────────────────────────
@@ -133,7 +146,7 @@ public class ZmiTrackerPlugin extends Plugin
             lastCraftAnimTick = client.getTickCount();
     }
 
-    // ── Rune gain tracking ─────────────────────────────────────────────────────
+    // ── Inventory rune tracking ────────────────────────────────────────────────
 
     @Subscribe
     public void onItemContainerChanged(ItemContainerChanged event)
@@ -167,28 +180,81 @@ public class ZmiTrackerPlugin extends Plugin
         sessionValue    = computeValue(sessionRunes);
     }
 
+    // ── Rune pouch tracking ────────────────────────────────────────────────────
+
+    @Subscribe
+    public void onVarbitChanged(VarbitChanged event)
+    {
+        int varbitId = event.getVarbitId();
+        for (int slot = 0; slot < POUCH_AMOUNT_VARBITS.length; slot++)
+        {
+            if (varbitId == POUCH_AMOUNT_VARBITS[slot])
+            {
+                int newAmount = event.getValue();
+                int oldAmount = pouchAmounts[slot];
+                int gained    = newAmount - oldAmount;
+                pouchAmounts[slot] = newAmount;
+
+                if (gained > 0)
+                {
+                    boolean inCraftWindow = (client.getTickCount() - lastCraftAnimTick) <= CRAFT_ANIM_WINDOW_TICKS;
+                    if (inCraftWindow)
+                    {
+                        int type   = client.getVarbitValue(POUCH_TYPE_VARBITS[slot]);
+                        int itemId = pouchTypeToItemId(type);
+                        if (itemId >= 0)
+                        {
+                            currentLapRunes.merge(itemId, gained, Integer::sum);
+                            sessionRunes.merge(itemId, gained, Integer::sum);
+                            currentLapValue = computeValue(currentLapRunes);
+                            sessionValue    = computeValue(sessionRunes);
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    private void snapshotPouch()
+    {
+        for (int slot = 0; slot < POUCH_AMOUNT_VARBITS.length; slot++)
+            pouchAmounts[slot] = client.getVarbitValue(POUCH_AMOUNT_VARBITS[slot]);
+    }
+
+    private static int pouchTypeToItemId(int type)
+    {
+        switch (type)
+        {
+            case 1:  return ItemID.AIR_RUNE;
+            case 2:  return ItemID.WATER_RUNE;
+            case 3:  return ItemID.EARTH_RUNE;
+            case 4:  return ItemID.FIRE_RUNE;
+            case 5:  return ItemID.MIND_RUNE;
+            case 6:  return ItemID.BODY_RUNE;
+            case 7:  return ItemID.DEATH_RUNE;
+            case 8:  return ItemID.NATURE_RUNE;
+            case 9:  return ItemID.CHAOS_RUNE;
+            case 10: return ItemID.LAW_RUNE;
+            case 11: return ItemID.COSMIC_RUNE;
+            case 12: return ItemID.BLOOD_RUNE;
+            case 13: return ItemID.ASTRAL_RUNE;
+            case 14: return ItemID.SOUL_RUNE;
+            case 15: return ItemID.WRATH_RUNE;
+            default: return -1;
+        }
+    }
+
     // ── Right-click reset ──────────────────────────────────────────────────────
 
     @Subscribe
     public void onOverlayMenuClicked(OverlayMenuClicked event)
     {
         if (event.getOverlay() == overlay && "Reset".equals(event.getEntry().getOption()))
-        {
             reset();
-        }
     }
 
     // ── Internals ──────────────────────────────────────────────────────────────
-
-    private void finalizeLap()
-    {
-        lastLapRunes.clear();
-        lastLapRunes.putAll(currentLapRunes);
-        lastLapValue = currentLapValue;
-        lapCount++;
-        currentLapRunes.clear();
-        currentLapValue = 0;
-    }
 
     private long computeValue(Map<Integer, Integer> runes)
     {
@@ -203,6 +269,7 @@ public class ZmiTrackerPlugin extends Plugin
         prevInventory.clear();
         currentLapRunes.clear();
         lastLapRunes.clear();
+        pendingLapRunes.clear();
         sessionRunes.clear();
         lastLapValue = currentLapValue = sessionValue = 0;
         lapCount = 0;
@@ -210,6 +277,7 @@ public class ZmiTrackerPlugin extends Plugin
         lapStart = null;
         wasBankOpen = false;
         lastCraftAnimTick = -100;
+        Arrays.fill(pouchAmounts, 0);
     }
 
     // ── Getters ────────────────────────────────────────────────────────────────

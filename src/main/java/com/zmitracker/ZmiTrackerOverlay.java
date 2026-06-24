@@ -11,9 +11,10 @@ import javax.inject.Inject;
 import java.awt.*;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.HashSet;
 
 public class ZmiTrackerOverlay extends OverlayPanel
 {
@@ -24,7 +25,7 @@ public class ZmiTrackerOverlay extends OverlayPanel
     private static final Color CURRENT_COLOR = new Color(255, 165,   0);
     private static final Color DIM_COLOR     = new Color(120, 120, 120);
 
-    private static final Set<Integer> ELEMENTAL_RUNE_IDS = new HashSet<>(java.util.Arrays.asList(
+    private static final Set<Integer> ELEMENTAL_IDS = new HashSet<>(Arrays.asList(
         ItemID.AIR_RUNE, ItemID.WATER_RUNE, ItemID.EARTH_RUNE, ItemID.FIRE_RUNE
     ));
 
@@ -43,7 +44,6 @@ public class ZmiTrackerOverlay extends OverlayPanel
         setPosition(OverlayPosition.TOP_LEFT);
         setPriority(OverlayPriority.LOW);
         panelComponent.setPreferredSize(new Dimension(230, 0));
-
         getMenuEntries().add(new OverlayMenuEntry(MenuAction.RUNELITE_OVERLAY, "Reset", "ZMI Rune Tracker"));
     }
 
@@ -53,7 +53,6 @@ public class ZmiTrackerOverlay extends OverlayPanel
         boolean hasData = plugin.getLapStart() != null || plugin.getLapCount() > 0 || plugin.getCurrentLapValue() > 0;
         if (!hasData && !config.showOutsideZmi()) return null;
 
-        // Set background opacity
         panelComponent.setBackgroundColor(new Color(23, 23, 23, config.backgroundOpacity()));
         panelComponent.getChildren().clear();
 
@@ -145,12 +144,11 @@ public class ZmiTrackerOverlay extends OverlayPanel
         if (runes.isEmpty()) return;
 
         runes.entrySet().stream()
-            .filter(e -> !config.hideElementalRunes() || !ELEMENTAL_RUNE_IDS.contains(e.getKey()))
+            .filter(e -> !shouldHide(e.getKey()))
             .sorted((a, b) -> Long.compare(
                 (long) itemManager.getItemPrice(b.getKey()) * b.getValue(),
                 (long) itemManager.getItemPrice(a.getKey()) * a.getValue()))
-            .forEach(e ->
-            {
+            .forEach(e -> {
                 long value = (long) itemManager.getItemPrice(e.getKey()) * e.getValue();
                 panelComponent.getChildren().add(LineComponent.builder()
                     .left("  " + QuantityFormatter.quantityToStackSize(e.getValue()) + "x " + runeName(e.getKey()))
@@ -158,6 +156,14 @@ public class ZmiTrackerOverlay extends OverlayPanel
                     .right(formatGp(value)).rightColor(LABEL_COLOR)
                     .build());
             });
+    }
+
+    private boolean shouldHide(int itemId)
+    {
+        if (config.hideElementalRunes() && ELEMENTAL_IDS.contains(itemId)) return true;
+        if (config.hideBodyRune() && itemId == ItemID.BODY_RUNE) return true;
+        if (config.hideMindRune() && itemId == ItemID.MIND_RUNE) return true;
+        return false;
     }
 
     private static String formatGp(long gp)
