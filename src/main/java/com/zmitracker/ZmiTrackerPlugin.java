@@ -29,8 +29,8 @@ public class ZmiTrackerPlugin extends Plugin
     private static final int RUNECRAFT_ANIMATION     = 791;
     private static final int CRAFT_ANIM_WINDOW_TICKS = 20;
     private static final int BANK_GROUP_ID           = 12;
+    private static final int ROLLING_LAP_COUNT       = 10;
 
-    // Rune pouch varbits: type slots and amount slots (3-slot + 4th slot for divine pouch)
     private static final int[] POUCH_TYPE_VARBITS   = {29, 30, 31, 1911};
     private static final int[] POUCH_AMOUNT_VARBITS = {1019, 1020, 1021, 1912};
 
@@ -47,23 +47,31 @@ public class ZmiTrackerPlugin extends Plugin
     @Inject private OverlayManager overlayManager;
     @Inject private ZmiTrackerOverlay overlay;
 
-    private final Map<Integer, Integer> prevInventory    = new HashMap<>();
-    private final Map<Integer, Integer> currentLapRunes  = new HashMap<>();
-    private final Map<Integer, Integer> lastLapRunes     = new HashMap<>();
-    private final Map<Integer, Integer> pendingLapRunes  = new HashMap<>();
-    private final Map<Integer, Integer> sessionRunes     = new HashMap<>();
+    private final Map<Integer, Integer> prevInventory   = new HashMap<>();
+    private final Map<Integer, Integer> currentLapRunes = new HashMap<>();
+    private final Map<Integer, Integer> lastLapRunes    = new HashMap<>();
+    private final Map<Integer, Integer> pendingLapRunes = new HashMap<>();
+    private final Map<Integer, Integer> sessionRunes    = new HashMap<>();
 
-    // Rune pouch snapshot [slot index] -> current amount
     private final int[] pouchAmounts = new int[4];
+
+    // Rolling GP/hour: last 10 laps
+    private final long[] rollingLapValues  = new long[ROLLING_LAP_COUNT];
+    private final long[] rollingLapSeconds = new long[ROLLING_LAP_COUNT];
+    private int rollingIndex = 0;
+    private int rollingCount = 0;
 
     private long lastLapValue    = 0;
     private long currentLapValue = 0;
     private long sessionValue    = 0;
     private int  lapCount        = 0;
 
-    private Instant lapStart        = null;
-    private long    lastLapSeconds  = 0;
-    private long    totalLapSeconds = 0;
+    // Timing
+    private Instant  lapStart        = null;
+    private Duration pausedDuration  = Duration.ZERO; // paused time in current lap
+    private Instant  logoutTime      = null;          // when we logged out
+    private long     lastLapSeconds  = 0;
+    private long     totalLapSeconds = 0;
 
     private boolean wasBankOpen      = false;
     private int     lastCraftAnimTick = -100;
@@ -88,6 +96,29 @@ public class ZmiTrackerPlugin extends Plugin
         return configManager.getConfig(ZmiTrackerConfig.class);
     }
 
+    // ── Login/logout tracking ──────────────────────────────────────────────────
+
+    @Subscribe
+    public void onGameStateChanged(GameStateChanged event)
+    {
+        GameState state = event.getGameState();
+        if (state == GameState.LOGIN_SCREEN || state == GameState.HOPPING)
+        {
+            // Logged out: record when
+            if (logoutTime == null)
+                logoutTime = Instant.now();
+        }
+        else if (state == GameState.LOGGED_IN)
+        {
+            // Logged back in: accumulate paused duration
+            if (logoutTime != null)
+            {
+                pausedDuration = pausedDuration.plus(Duration.between(logoutTime, Instant.now()));
+                logoutTime = null;
+            }
+        }
+    }
+
     // ── Bank detection ─────────────────────────────────────────────────────────
 
     @Subscribe
@@ -106,7 +137,6 @@ public class ZmiTrackerPlugin extends Plugin
 
     private void onBankOpened()
     {
-        // Arrived at bank after crafting — snapshot runes but wait until bank closes to record time
         if (!currentLapRunes.isEmpty())
         {
             pendingLapRunes.clear();
@@ -121,16 +151,28 @@ public class ZmiTrackerPlugin extends Plugin
 
     private void onBankClosed()
     {
-        // Full lap complete: bank-close to bank-close (includes banking + running + crafting)
         if (lapStart != null && !pendingLapRunes.isEmpty())
         {
-            lastLapSeconds = Duration.between(lapStart, Instant.now()).getSeconds();
-            totalLapSeconds += lastLapSeconds;
+            // Elapsed wall time minus any paused time
+            long elapsed = Duration.between(lapStart, Instant.now())
+                .minus(pausedDuration).getSeconds();
+            elapsed = Math.max(1, elapsed);
+
+            lastLapSeconds = elapsed;
+            totalLapSeconds += elapsed;
+
+            // Rolling GP/hour
+            rollingLapValues [rollingIndex] = lastLapValue;
+            rollingLapSeconds[rollingIndex] = elapsed;
+            rollingIndex = (rollingIndex + 1) % ROLLING_LAP_COUNT;
+            if (rollingCount < ROLLING_LAP_COUNT) rollingCount++;
+
             lapCount++;
             pendingLapRunes.clear();
         }
-        // Start timer for next lap
-        lapStart = Instant.now();
+
+        lapStart       = Instant.now();
+        pausedDuration = Duration.ZERO;
         snapshotPouch();
     }
 
@@ -275,9 +317,15 @@ public class ZmiTrackerPlugin extends Plugin
         lapCount = 0;
         lastLapSeconds = totalLapSeconds = 0;
         lapStart = null;
+        pausedDuration = Duration.ZERO;
+        logoutTime = null;
         wasBankOpen = false;
         lastCraftAnimTick = -100;
         Arrays.fill(pouchAmounts, 0);
+        Arrays.fill(rollingLapValues, 0);
+        Arrays.fill(rollingLapSeconds, 0);
+        rollingIndex = 0;
+        rollingCount = 0;
     }
 
     // ── Getters ────────────────────────────────────────────────────────────────
@@ -291,6 +339,31 @@ public class ZmiTrackerPlugin extends Plugin
     public int     getLapCount()           { return lapCount; }
     public long    getLastLapSeconds()     { return lastLapSeconds; }
     public long    getAverageLapSeconds()  { return lapCount > 0 ? totalLapSeconds / lapCount : 0; }
-    public Instant getLapStart()           { return lapStart; }
     public ItemManager getItemManager()    { return itemManager; }
+
+    public long getCurrentLapElapsed()
+    {
+        if (lapStart == null) return 0;
+        Duration elapsed = Duration.between(lapStart, Instant.now()).minus(pausedDuration);
+        return Math.max(0, elapsed.getSeconds());
+    }
+
+    public boolean isLapInProgress()
+    {
+        return lapStart != null;
+    }
+
+    public long getRollingGpPerHour()
+    {
+        if (rollingCount == 0) return 0;
+        long totalValue   = 0;
+        long totalSeconds = 0;
+        for (int i = 0; i < rollingCount; i++)
+        {
+            totalValue   += rollingLapValues[i];
+            totalSeconds += rollingLapSeconds[i];
+        }
+        if (totalSeconds == 0) return 0;
+        return totalValue * 3600L / totalSeconds;
+    }
 }

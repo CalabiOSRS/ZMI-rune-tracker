@@ -9,8 +9,6 @@ import net.runelite.client.util.QuantityFormatter;
 
 import javax.inject.Inject;
 import java.awt.*;
-import java.time.Duration;
-import java.time.Instant;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Map;
@@ -32,7 +30,6 @@ public class ZmiTrackerOverlay extends OverlayPanel
     private final ZmiTrackerPlugin plugin;
     private final ZmiTrackerConfig config;
     private final ItemManager itemManager;
-    private final Instant sessionStart = Instant.now();
 
     @Inject
     public ZmiTrackerOverlay(ZmiTrackerPlugin plugin, ZmiTrackerConfig config, ItemManager itemManager)
@@ -50,7 +47,7 @@ public class ZmiTrackerOverlay extends OverlayPanel
     @Override
     public Dimension render(Graphics2D graphics)
     {
-        boolean hasData = plugin.getLapStart() != null || plugin.getLapCount() > 0 || plugin.getCurrentLapValue() > 0;
+        boolean hasData = plugin.isLapInProgress() || plugin.getLapCount() > 0 || plugin.getCurrentLapValue() > 0;
         if (!hasData && !config.showOutsideZmi()) return null;
 
         panelComponent.setBackgroundColor(new Color(23, 23, 23, config.backgroundOpacity()));
@@ -61,10 +58,9 @@ public class ZmiTrackerOverlay extends OverlayPanel
             .text("ZMI Rune Tracker").color(HEADER_COLOR).build());
 
         // ── Current lap ────────────────────────────────────────────────────────
-        Instant lapStart = plugin.getLapStart();
-        if (lapStart != null)
+        if (plugin.isLapInProgress())
         {
-            long elapsed = Duration.between(lapStart, Instant.now()).getSeconds();
+            long elapsed = plugin.getCurrentLapElapsed();
             panelComponent.getChildren().add(LineComponent.builder().left("").build());
             panelComponent.getChildren().add(LineComponent.builder()
                 .left("Current lap (" + formatTime(elapsed) + ")")
@@ -124,14 +120,18 @@ public class ZmiTrackerOverlay extends OverlayPanel
         if (config.showSessionBreakdown())
             renderBreakdown(plugin.getSessionRunes());
 
+        // ── Rolling GP/hour (last 10 laps) ────────────────────────────────────
         if (config.showGpPerHour())
         {
-            long elapsed = Duration.between(sessionStart, Instant.now()).getSeconds();
-            if (elapsed > 0 && plugin.getSessionValue() > 0)
+            long gpPerHour = plugin.getRollingGpPerHour();
+            if (gpPerHour > 0)
             {
                 panelComponent.getChildren().add(LineComponent.builder()
                     .left("GP / hour").leftColor(LABEL_COLOR)
-                    .right(formatGp(plugin.getSessionValue() * 3600L / elapsed)).rightColor(VALUE_COLOR)
+                    .right(formatGp(gpPerHour)).rightColor(VALUE_COLOR)
+                    .build());
+                panelComponent.getChildren().add(LineComponent.builder()
+                    .left("  (last 10 laps)").leftColor(DIM_COLOR)
                     .build());
             }
         }
