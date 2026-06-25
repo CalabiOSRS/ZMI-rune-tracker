@@ -5,6 +5,7 @@ import net.runelite.api.*;
 import net.runelite.api.EnumComposition;
 import net.runelite.api.EnumID;
 import net.runelite.api.events.*;
+import net.runelite.api.Skill;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -69,6 +70,12 @@ public class ZmiTrackerPlugin extends Plugin
     private long sessionValue    = 0;
     private int  lapCount        = 0;
 
+    // XP tracking
+    private long lastLapXp   = 0;
+    private long sessionXp   = 0;
+    private long currentLapXp = 0;
+    private long prevRcXp    = -1;
+
     // Timing
     private Instant  lapStart        = null;
     private Duration pausedDuration  = Duration.ZERO; // paused time in current lap
@@ -110,6 +117,9 @@ public class ZmiTrackerPlugin extends Plugin
             // Logged out: record when
             if (logoutTime == null)
                 logoutTime = Instant.now();
+            pouchReady = false;
+            Arrays.fill(pouchAmounts, 0);
+            Arrays.fill(pendingGains, 0);
         }
         else if (state == GameState.LOGGED_IN)
         {
@@ -171,6 +181,10 @@ public class ZmiTrackerPlugin extends Plugin
 
     private void onBankOpened()
     {
+        lastLapXp = currentLapXp;
+        sessionXp += currentLapXp;
+        currentLapXp = 0;
+
         if (!currentLapRunes.isEmpty())
         {
             pendingLapRunes.clear();
@@ -208,6 +222,22 @@ public class ZmiTrackerPlugin extends Plugin
         lapStart       = Instant.now();
         pausedDuration = Duration.ZERO;
         snapshotPouch();
+    }
+
+    @Subscribe
+    public void onStatChanged(StatChanged event)
+    {
+        if (event.getSkill() != Skill.RUNECRAFT) return;
+        long xp = event.getXp();
+        if (prevRcXp < 0)
+        {
+            prevRcXp = xp;
+            return;
+        }
+        long gained = xp - prevRcXp;
+        prevRcXp = xp;
+        if (gained > 0)
+            currentLapXp += gained;
     }
 
     // ── Craft animation gate ───────────────────────────────────────────────────
@@ -327,6 +357,10 @@ public class ZmiTrackerPlugin extends Plugin
         Arrays.fill(pouchAmounts, 0);
         Arrays.fill(pendingGains, 0);
         pouchReady = false;
+        lastLapXp    = 0;
+        sessionXp    = 0;
+        currentLapXp = 0;
+        prevRcXp     = -1;
         Arrays.fill(rollingLapValues, 0);
         Arrays.fill(rollingLapSeconds, 0);
         rollingIndex = 0;
@@ -345,6 +379,9 @@ public class ZmiTrackerPlugin extends Plugin
     public long    getLastLapSeconds()     { return lastLapSeconds; }
     public long    getAverageLapSeconds()  { return lapCount > 0 ? totalLapSeconds / lapCount : 0; }
     public ItemManager getItemManager()    { return itemManager; }
+    public long getLastLapXp()   { return lastLapXp; }
+    public long getSessionXp()   { return sessionXp; }
+    public long getTotalSeconds() { return totalLapSeconds; }
 
     public long getCurrentLapElapsed()
     {

@@ -1,5 +1,7 @@
 package com.zmitracker;
 
+import com.zmitracker.GpHourMode;
+
 import net.runelite.api.ItemID;
 import net.runelite.api.MenuAction;
 import net.runelite.client.game.ItemManager;
@@ -121,7 +123,7 @@ public class ZmiTrackerOverlay extends OverlayPanel
             renderBreakdown(plugin.getSessionRunes());
 
         // ── Rolling GP/hour (last 10 laps) ────────────────────────────────────
-        if (config.showGpPerHour())
+        if (config.gpHourMode() != GpHourMode.HIDDEN)
         {
             long gpPerHour = plugin.getRollingGpPerHour();
             if (gpPerHour > 0)
@@ -130,10 +132,26 @@ public class ZmiTrackerOverlay extends OverlayPanel
                     .left("GP / hour").leftColor(LABEL_COLOR)
                     .right(formatGp(gpPerHour)).rightColor(VALUE_COLOR)
                     .build());
-                panelComponent.getChildren().add(LineComponent.builder()
-                    .left("  (last 10 laps)").leftColor(DIM_COLOR)
-                    .build());
+
             }
+        }
+
+        // ── XP tracking ────────────────────────────────────────────────────────
+        if (config.showXpLastLap() && plugin.getLastLapXp() > 0)
+        {
+            panelComponent.getChildren().add(LineComponent.builder()
+                .left("XP last lap").leftColor(LABEL_COLOR)
+                .right(QuantityFormatter.quantityToStackSize(plugin.getLastLapXp()) + " xp").rightColor(VALUE_COLOR)
+                .build());
+        }
+
+        if (config.showXpPerHour() && plugin.getTotalSeconds() > 0 && plugin.getSessionXp() > 0)
+        {
+            long xphr = plugin.getSessionXp() * 3600 / plugin.getTotalSeconds();
+            panelComponent.getChildren().add(LineComponent.builder()
+                .left("XP/hour").leftColor(LABEL_COLOR)
+                .right(QuantityFormatter.quantityToStackSize(xphr) + " xp").rightColor(VALUE_COLOR)
+                .build());
         }
 
         // ── Pouch warning ──────────────────────────────────────────────────────
