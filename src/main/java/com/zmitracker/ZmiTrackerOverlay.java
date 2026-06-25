@@ -136,6 +136,20 @@ public class ZmiTrackerOverlay extends OverlayPanel
             }
         }
 
+        // ── Pouch warning ──────────────────────────────────────────────────────
+        if (config.showPouchWarning())
+        {
+            panelComponent.getChildren().add(LineComponent.builder().left("").build());
+            panelComponent.getChildren().add(LineComponent.builder()
+                .left("Reset session if you manually")
+                .leftColor(new Color(255, 165, 0))
+                .build());
+            panelComponent.getChildren().add(LineComponent.builder()
+                .left("add/remove runes from pouch")
+                .leftColor(new Color(255, 165, 0))
+                .build());
+        }
+
         return super.render(graphics);
     }
 

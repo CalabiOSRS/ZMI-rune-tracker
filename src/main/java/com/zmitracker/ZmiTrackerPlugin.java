@@ -1,8 +1,9 @@
 package com.zmitracker;
 
 import com.google.inject.Provides;
-import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.*;
+import net.runelite.api.EnumComposition;
+import net.runelite.api.EnumID;
 import net.runelite.api.events.*;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.config.ConfigManager;
@@ -18,7 +19,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 
-@Slf4j
 @PluginDescriptor(
     name = "ZMI Rune Tracker",
     description = "Tracks rune values per lap and total session at the Ourania (ZMI) Altar",
@@ -31,8 +31,8 @@ public class ZmiTrackerPlugin extends Plugin
     private static final int BANK_GROUP_ID           = 12;
     private static final int ROLLING_LAP_COUNT       = 10;
 
-    private static final int[] POUCH_TYPE_VARBITS   = {29, 30, 31, 1911};
-    private static final int[] POUCH_AMOUNT_VARBITS = {1019, 1020, 1021, 1912};
+    private static final int[] POUCH_TYPE_VARBITS   = {29, 1622, 1623, 14285};
+    private static final int[] POUCH_AMOUNT_VARBITS = {1624, 1625, 1626, 14286};
 
     static final Set<Integer> RUNE_IDS = new HashSet<>(Arrays.asList(
         ItemID.AIR_RUNE, ItemID.MIND_RUNE, ItemID.WATER_RUNE, ItemID.EARTH_RUNE,
@@ -55,6 +55,8 @@ public class ZmiTrackerPlugin extends Plugin
     private final Map<Integer, Integer> sessionRunes    = new HashMap<>();
 
     private final int[] pouchAmounts = new int[4];
+    private final int[] pendingGains = new int[4];
+    private boolean pouchReady      = false;
 
     // Rolling GP/hour: last 10 laps
     private final long[] rollingLapValues  = new long[ROLLING_LAP_COUNT];
@@ -82,7 +84,7 @@ public class ZmiTrackerPlugin extends Plugin
     {
         overlayManager.add(overlay);
         reset();
-        clientThread.invokeLater(this::snapshotPouch);
+        // pouchReady will be set on first bank open
     }
 
     @Override
@@ -126,14 +128,45 @@ public class ZmiTrackerPlugin extends Plugin
     public void onGameTick(GameTick tick)
     {
         Widget bankWidget = client.getWidget(BANK_GROUP_ID, 0);
-        boolean isBankOpen = bankWidget != null && !bankWidget.isHidden();
+        boolean bankOpen = bankWidget != null && !bankWidget.isHidden();
 
-        if (isBankOpen && !wasBankOpen)
+        // First bank open after login: initialize pouch baseline
+        if (bankOpen && !pouchReady)
+        {
+            for (int slot = 0; slot < POUCH_AMOUNT_VARBITS.length; slot++)
+                pouchAmounts[slot] = client.getVarbitValue(POUCH_AMOUNT_VARBITS[slot]);
+            Arrays.fill(pendingGains, 0);
+            pouchReady = true;
+        }
+
+        // Resolve pending gains on next tick after varbit fires
+        if (pouchReady && !bankOpen)
+        {
+            for (int slot = 0; slot < POUCH_TYPE_VARBITS.length; slot++)
+            {
+                if (pendingGains[slot] > 0)
+                {
+                    int itemId = pouchTypeToItemId(client.getVarbitValue(POUCH_TYPE_VARBITS[slot]));
+                    if (itemId >= 0)
+                    {
+                        currentLapRunes.merge(itemId, pendingGains[slot], Integer::sum);
+                        sessionRunes.merge(itemId, pendingGains[slot], Integer::sum);
+                        currentLapValue = computeValue(currentLapRunes);
+                        sessionValue    = computeValue(sessionRunes);
+                    }
+                    pendingGains[slot] = 0;
+                }
+            }
+        }
+
+
+
+        if (bankOpen && !wasBankOpen)
             onBankOpened();
-        else if (!isBankOpen && wasBankOpen)
+        else if (!bankOpen && wasBankOpen)
             onBankClosed();
 
-        wasBankOpen = isBankOpen;
+        wasBankOpen = bankOpen;
     }
 
     private void onBankOpened()
@@ -228,32 +261,17 @@ public class ZmiTrackerPlugin extends Plugin
     @Subscribe
     public void onVarbitChanged(VarbitChanged event)
     {
-        int varbitId = event.getVarbitId();
+        int id = event.getVarbitId();
         for (int slot = 0; slot < POUCH_AMOUNT_VARBITS.length; slot++)
         {
-            if (varbitId == POUCH_AMOUNT_VARBITS[slot])
+            if (id == POUCH_AMOUNT_VARBITS[slot])
             {
                 int newAmount = event.getValue();
-                int oldAmount = pouchAmounts[slot];
-                int gained    = newAmount - oldAmount;
+                int gained    = newAmount - pouchAmounts[slot];
                 pouchAmounts[slot] = newAmount;
-
-                if (gained > 0)
-                {
-                    boolean inCraftWindow = (client.getTickCount() - lastCraftAnimTick) <= CRAFT_ANIM_WINDOW_TICKS;
-                    if (inCraftWindow)
-                    {
-                        int type   = client.getVarbitValue(POUCH_TYPE_VARBITS[slot]);
-                        int itemId = pouchTypeToItemId(type);
-                        if (itemId >= 0)
-                        {
-                            currentLapRunes.merge(itemId, gained, Integer::sum);
-                            sessionRunes.merge(itemId, gained, Integer::sum);
-                            currentLapValue = computeValue(currentLapRunes);
-                            sessionValue    = computeValue(sessionRunes);
-                        }
-                    }
-                }
+                // Only track gains when ready (first bank visited) and bank NOT open
+                if (pouchReady && !wasBankOpen && gained > 0)
+                    pendingGains[slot] += gained;
                 break;
             }
         }
@@ -265,27 +283,11 @@ public class ZmiTrackerPlugin extends Plugin
             pouchAmounts[slot] = client.getVarbitValue(POUCH_AMOUNT_VARBITS[slot]);
     }
 
-    private static int pouchTypeToItemId(int type)
+    private int pouchTypeToItemId(int type)
     {
-        switch (type)
-        {
-            case 1:  return ItemID.AIR_RUNE;
-            case 2:  return ItemID.WATER_RUNE;
-            case 3:  return ItemID.EARTH_RUNE;
-            case 4:  return ItemID.FIRE_RUNE;
-            case 5:  return ItemID.MIND_RUNE;
-            case 6:  return ItemID.BODY_RUNE;
-            case 7:  return ItemID.DEATH_RUNE;
-            case 8:  return ItemID.NATURE_RUNE;
-            case 9:  return ItemID.CHAOS_RUNE;
-            case 10: return ItemID.LAW_RUNE;
-            case 11: return ItemID.COSMIC_RUNE;
-            case 12: return ItemID.BLOOD_RUNE;
-            case 13: return ItemID.ASTRAL_RUNE;
-            case 14: return ItemID.SOUL_RUNE;
-            case 15: return ItemID.WRATH_RUNE;
-            default: return -1;
-        }
+        if (type == 0) return -1;
+        EnumComposition e = client.getEnum(EnumID.RUNEPOUCH_RUNE);
+        return e.getIntValue(type);
     }
 
     // ── Right-click reset ──────────────────────────────────────────────────────
@@ -323,6 +325,8 @@ public class ZmiTrackerPlugin extends Plugin
         wasBankOpen = false;
         lastCraftAnimTick = -100;
         Arrays.fill(pouchAmounts, 0);
+        Arrays.fill(pendingGains, 0);
+        pouchReady = false;
         Arrays.fill(rollingLapValues, 0);
         Arrays.fill(rollingLapSeconds, 0);
         rollingIndex = 0;

@@ -44,4 +44,8 @@ public interface ZmiTrackerConfig extends Config
     @ConfigItem(keyName = "showOutsideZmi", name = "Always show overlay",
         description = "Keep the overlay visible even before your first crafting lap", position = 8)
     default boolean showOutsideZmi() { return false; }
+
+    @ConfigItem(keyName = "showPouchWarning", name = "Show pouch warning",
+        description = "Show a reminder to reset session after manually adding/removing runes from the pouch", position = 9)
+    default boolean showPouchWarning() { return true; }
 }
