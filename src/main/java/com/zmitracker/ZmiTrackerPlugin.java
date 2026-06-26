@@ -30,6 +30,7 @@ public class ZmiTrackerPlugin extends Plugin
     private static final int RUNECRAFT_ANIMATION     = 791;
     private static final int CRAFT_ANIM_WINDOW_TICKS = 20;
     private static final int BANK_GROUP_ID           = 12;
+    private static final Set<Integer> ZMI_REGIONS = new HashSet<>(Arrays.asList(11862, 11863, 12118, 12119));
     private static final int ROLLING_LAP_COUNT       = 10;
 
     private static final int[] POUCH_TYPE_VARBITS   = {29, 1622, 1623, 14285};
@@ -172,9 +173,13 @@ public class ZmiTrackerPlugin extends Plugin
 
 
         if (bankOpen && !wasBankOpen)
-            onBankOpened();
+        {
+            if (isInZmiCave()) onBankOpened();
+        }
         else if (!bankOpen && wasBankOpen)
-            onBankClosed();
+        {
+            if (isInZmiCave()) onBankClosed();
+        }
 
         wasBankOpen = bankOpen;
     }
@@ -305,6 +310,13 @@ public class ZmiTrackerPlugin extends Plugin
                 break;
             }
         }
+    }
+
+    private boolean isInZmiCave()
+    {
+        if (client.getLocalPlayer() == null) return false;
+        int region = client.getLocalPlayer().getWorldLocation().getRegionID();
+        return ZMI_REGIONS.contains(region);
     }
 
     private void snapshotPouch()
